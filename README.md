@@ -25,14 +25,18 @@ python simple_ml.py train
 ```
 
 Programata sporeduva mal broj TF-IDF postavki na trenirachkiot skup, go
-izbira pragot spored makro-F1 na razvojnite podatoci, a potoa ednash go
-proveruva izbraniot model na test-skupot. Ne ja namaluva namerno
-neutralnata klasa. Makro-F1 gi tretira emociite podednakvo; ocenite za
+izbira pragot spored makro-F0.5 na razvojnite podatoci, a potoa ednash go
+proveruva izbraniot model na test-skupot. F0.5 dava pogolema tezhina na
+preciznosta otkolku na odzivot: obichno znachi pomalku pogreshno dodadeni
+emocii, no mozhe da propushti povekje vistinski emocii. Grafikonot za
+preciznost i odziv go prikazhuva ovoj kompromis. Ne ja namaluva namerno
+neutralnata klasa. Makro-merki gi tretiraat emociite podednakvo; ocenite za
 retkite emocii se ponepostojani bidejki imaat pomalku primeri.
 
 Rezultatite se vo `results/ml/`: metriki po emocija, pregled na izborot na
-postavki, test-rezime i akademski izvestaj. Grafikoni se sozdavaat za pragovite,
-F1 po emocija, preciznost/odziv, ko-pojava na oznaki i kalibracija na skorovite.
+postavki, test-rezime i akademski izvestaj. Grafikoni se sozdavaat za
+preciznost/odziv po prag, preciznost/odziv po emocija, F1 po emocija,
+ko-pojava na oznaki i kalibracija na skorovite.
 `model.joblib` e lokalna datoteka i ne se dodava vo Git.
 
 ## Predviduvanje
@@ -61,6 +65,9 @@ skorovi za dominantna emocija i emocionalna grupa. Dominantna e emocijata so
 najvisok skor od site 28 emocii; ova e odvoeno od pragot za povekje oznaki.
 Grafikonite za dolzhina, psovki, ton, subjektivnost i Reddit-zaednici gi
 prikazhuvaat opisnite podatoci od CSV po VerA ML-grupa; tie ne se metriki za
-uspeh na klasifikatorot.
+uspeh na klasifikatorot. Grafikonite gi prikazhuvaat goleminite na grupite;
+Reddit-grafikonot prikazhuva procentualen sostav na dominantnite ML-grupi
+vo 10te zaednici so najmalku 200 komentari, so brojot na primeri za sekoja.
+Kratko tekstualno tolkuvanje se zapishuva vo `results/izvestaj_opisen.md`.
 
 CSV-so komentarite sodrzhi tekst i ne se vkluchuva vo repozitoriumot.

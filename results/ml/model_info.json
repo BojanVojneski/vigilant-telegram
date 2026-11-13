@@ -1,16 +1,22 @@
 {
   "algorithm": "TF-IDF + One-vs-Rest Logistic Regression",
+  "threshold_selection_metric": "development macro F0.5",
   "C": 5.0,
   "ngram_range": [
     1,
-    2
+    1
   ],
-  "threshold": 0.125,
-  "development_macro_f1": 0.4471672014437829,
+  "threshold": 0.25,
+  "development_macro_f0_5": 0.4737930079974016,
+  "development_threshold_metrics": {
+    "macro_precision": 0.5585475260141353,
+    "macro_recall": 0.3731174363188834,
+    "macro_f1": 0.4197238279886581
+  },
   "train_comments": 43410,
   "development_comments": 5426,
   "test_comments": 5427,
-  "feature_count": 58338,
+  "feature_count": 13077,
   "random_seed": 42,
   "scikit_learn_version": "1.9.1",
   "python_version": "3.14.3"

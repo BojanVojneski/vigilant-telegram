@@ -15,7 +15,20 @@ import numpy as np
 import pandas as pd
 
 from emotion_labels import EMOTION_LABELS
+from plot_style import (
+    BLUE,
+    GOLD,
+    GRID,
+    INK,
+    ORANGE,
+    RED,
+    SLATE,
+    TEAL,
+    apply_plot_style,
+)
 from simple_ml import predict_scores
+
+apply_plot_style()
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -26,14 +39,36 @@ SENTIMENT_MAPPING = (
     PROJECT_ROOT / "data" / "simplified" / "sentiment_mapping.json"
 )
 GROUP_ORDER = ["negative", "positive", "ambiguous", "neutral"]
-BLUE = "#4C78A8"
-ORANGE = "#F58518"
 GROUP_LABELS = {
     "negative": "Negativna",
     "positive": "Pozitivna",
     "ambiguous": "Nejasna",
     "neutral": "Neutralna",
 }
+GROUP_COLORS = {
+    "negative": RED,
+    "positive": TEAL,
+    "ambiguous": GOLD,
+    "neutral": SLATE,
+}
+
+
+def _style_axis(axis, grid_axis: str = "x") -> None:
+    axis.set_axisbelow(True)
+    axis.grid(axis=grid_axis, color=GRID, linewidth=0.8)
+    axis.spines[["top", "right"]].set_visible(False)
+    axis.spines[["left", "bottom"]].set_color("#AAB4BF")
+    axis.tick_params(colors=INK, labelsize=9)
+
+
+def _save_figure(
+    fig,
+    path: Path,
+    rect: tuple[float, float, float, float] = (0, 0, 1, 1),
+) -> None:
+    fig.tight_layout(rect=rect)
+    fig.savefig(path, dpi=180, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
 
 
 def _load_emotion_groups(emotions: list[str]) -> dict[str, str]:
@@ -179,24 +214,34 @@ def run_simple_analysis(
     )
     group_table["Komentari_so_zbor_od_listata_za_psovki_procent"] *= 100
 
-    subreddit_table = (
-        data.groupby("subreddit", observed=True)
-        .agg(
-            Broj_komentari=("subreddit", "size"),
-            Prosechen_neneutralen_rezultat=("neutral", lambda scores: 1 - scores.mean()),
-        )
-        .query("Broj_komentari >= 200")
-        .sort_values("Broj_komentari", ascending=False)
+    subreddit_sizes = data.groupby("subreddit", observed=True).size()
+    top_subreddits = (
+        subreddit_sizes[subreddit_sizes >= 200]
+        .sort_values(ascending=False)
         .head(10)
-        .sort_values("Prosechen_neneutralen_rezultat")
-        .reset_index()
+        .index
     )
-    subreddit_table["Prosechen_neneutralen_rezultat"] *= 100
-    subreddit_table = subreddit_table.rename(
+    subreddit_rows = data[data["subreddit"].isin(top_subreddits)]
+    subreddit_mix = (
+        pd.crosstab(subreddit_rows["subreddit"], subreddit_rows["grupa"], normalize="index")
+        .reindex(index=top_subreddits, columns=GROUP_ORDER, fill_value=0)
+        .mul(100)
+    )
+    subreddit_table = subreddit_mix.rename(
         columns={
-            "subreddit": "Reddit_zaednica",
-            "Prosechen_neneutralen_rezultat": "Prosechen_neneutralen_rezultat_procent",
+            group: f"{GROUP_LABELS[group]}_procent"
+            for group in GROUP_ORDER
         }
+    )
+    subreddit_table.insert(
+        0,
+        "Broj_komentari",
+        subreddit_sizes.reindex(top_subreddits).astype(int),
+    )
+    subreddit_table.index.name = "Reddit_zaednica"
+    subreddit_table = (
+        subreddit_table.sort_values(f"{GROUP_LABELS['negative']}_procent")
+        .reset_index()
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -207,115 +252,226 @@ def run_simple_analysis(
     group_table.to_csv(group_path, index=False)
     subreddit_table.to_csv(subreddit_path, index=False)
 
-    top_emotions = (
-        emotion_table.assign(
-            vkupno=lambda table: (
-                table["VerA_ML_komentari"] + table["Izvorni_rateri_komentari"]
-            ),
+    group_rows = "\n".join(
+        (
+            f"| {row.Emocionalna_grupa} | {int(row.Broj_komentari):,} | "
+            f"{row.Broj_komentari / len(data) * 100:.1f}% | "
+            f"{row.Mediana_zborovi:.0f} | "
+            f"{row.Komentari_so_zbor_od_listata_za_psovki_procent:.1f}% | "
+            f"{row.Prosechen_ton:.2f} | {row.Prosechna_subjektivnost:.2f} |"
         )
-        .set_index("Emocija")
-        .nlargest(10, "vkupno")
-        .sort_values("vkupno")
+        for row in group_table.itertuples(index=False)
     )
+    emotion_rows = "\n".join(
+        f"| {row.Emocija} | {int(row.VerA_ML_komentari):,} | "
+        f"{row.VerA_ML_procent:.1f}% |"
+        for row in emotion_table.nlargest(5, "VerA_ML_komentari").itertuples(
+            index=False
+        )
+    )
+    report_path = output_dir / "izvestaj_opisen.md"
+    report_path.write_text(
+        f"""# Opisen pregled na komentari
+
+## Podatoci i model
+
+Analizirani se {len(data):,} komentari. VerA ML modelot ja odreduva
+dominantnata emocija kako emocijata so najvisok skor od 28 emocii; od nea
+se izveduva emocionalnata grupa. Sporedbata so izvornite ocenuvachi opfakja
+{len(human_dominant):,} komentari so dostupni oznaki.
+
+## Rezultati po emocionalna grupa
+
+| Grupa | Komentari | Udel | Mediana zborovi | So zbor od listata za psovki | Prosechen ton | Subjektivnost |
+|---|---:|---:|---:|---:|---:|---:|
+{group_rows}
+
+## Pet najchesti dominantni emocii
+
+| Emocija | Komentari spored VerA ML | Udel |
+|---|---:|---:|
+{emotion_rows}
+
+## Tolkuvanje
+
+Grafikonite za ton, subjektivnost, dolzhina i zborovi od listata za psovki
+gi sumiraat vrednostite vo vlezniot CSV po ML-grupa; tie ne se merki za
+uspeh na klasifikatorot i ne pokazhuvaat prichinska povrzanost. Reddit
+profilot gi prikazhuva dominantnite ML-grupi za deset zaednici so najmalku
+200 komentari. Rezultatite se opisni, a ML-oznakite ne se psiholoshka
+procena na avtorite.
+""",
+        encoding="utf-8",
+    )
+
+    top_emotions = emotion_table.assign(
+        najvisok_procent=lambda table: table[
+            ["VerA_ML_procent", "Izvorni_rateri_procent"]
+        ].max(axis=1)
+    ).nlargest(10, "najvisok_procent").sort_values("najvisok_procent")
     figure_paths = {}
 
     fig, axis = plt.subplots(figsize=(9, 6))
     y = np.arange(len(top_emotions))
     height = 0.38
-    axis.barh(
+    model_bars = axis.barh(
         y - height / 2,
-        top_emotions["VerA_ML_procent"],
+        top_emotions["VerA_ML_procent"].to_numpy(),
         height,
-        label="VerA ML model",
+        label=f"VerA ML (n={len(data):,})",
         color=BLUE,
+        zorder=2,
     )
-    axis.barh(
+    rater_bars = axis.barh(
         y + height / 2,
-        top_emotions["Izvorni_rateri_procent"],
+        top_emotions["Izvorni_rateri_procent"].to_numpy(),
         height,
-        label="Izvorni ocenuvachi",
+        label=f"Izvorni ocenuvachi (n={len(human_dominant):,})",
         color=ORANGE,
+        zorder=2,
     )
-    axis.set_yticks(y, top_emotions.index)
-    axis.set_xlabel("Komentari (%)")
-    axis.set_title("Dominantni emocii: VerA ML model i ocenuvachi")
-    axis.legend()
-    axis.grid(axis="x", alpha=0.2)
-    fig.tight_layout()
+    axis.set_yticks(y, top_emotions["Emocija"])
+    axis.set_xlabel("Udel od komentarite (%)")
+    axis.set_title(
+        "Dominantni emocii: VerA ML model i ocenuvachi",
+        loc="left",
+        fontweight="semibold",
+    )
+    axis.bar_label(model_bars, fmt="%.1f%%", padding=3, fontsize=8)
+    axis.bar_label(rater_bars, fmt="%.1f%%", padding=3, fontsize=8)
+    axis.legend(frameon=False, loc="lower right")
+    _style_axis(axis)
+    axis.set_xlim(0, max(12, top_emotions[
+        ["VerA_ML_procent", "Izvorni_rateri_procent"]
+    ].to_numpy().max() * 1.18))
     figure_paths["emotion_frequency"] = output_dir / "chestota_emocii.png"
-    fig.savefig(figure_paths["emotion_frequency"], dpi=140, bbox_inches="tight")
-    plt.close(fig)
+    _save_figure(fig, figure_paths["emotion_frequency"])
 
     charts = [
         (
             "Komentari_so_zbor_od_listata_za_psovki_procent",
             "Komentari so zbor od listata za psovki (%)",
-            "Komentari (%)",
-            None,
+            "Komentari (%) (opseg 0-20)",
+            (0, 20),
             "psovki",
         ),
-        ("Mediana_zborovi", "Tipichna dolzhina na komentar", "Mediana na zborovi", None, "dolzhina"),
-        ("Prosechen_ton", "Prosechen ton na tekstot", "Prosechen ton (-1 negativno, 1 pozitivno)", None, "ton"),
+        (
+            "Mediana_zborovi",
+            "Tipichna dolzhina na komentar",
+            "Mediana na zborovi",
+            (0, max(20, group_table["Mediana_zborovi"].max() + 2)),
+            "dolzhina",
+        ),
+        (
+            "Prosechen_ton",
+            "Prosechen ton na tekstot",
+            "Prosechen ton (-1 negativno, 1 pozitivno)",
+            (-1, 1),
+            "ton",
+        ),
         (
             "Prosechna_subjektivnost",
             "Prosechna subjektivnost na tekstot",
             "Rezultat (0 do 1)",
-            1,
+            (0, 1),
             "subjektivnost",
         ),
     ]
-    for column, title, ylabel, limit, name in charts:
-        fig, axis = plt.subplots(figsize=(8, 4.5))
-        bars = axis.bar(
-            group_table["Emocionalna_grupa"],
-            group_table[column],
-            color=BLUE,
-        )
-        axis.set_title(title)
-        axis.set_xlabel("Emocionalna grupa od VerA ML modelot")
-        axis.set_ylabel(ylabel)
-        if limit is not None:
-            axis.set_ylim(0, limit)
-        if column == "Prosechen_ton":
-            axis.axhline(0, color="black", linewidth=0.8)
-        axis.grid(axis="y", alpha=0.2)
-        for bar, value in zip(bars, group_table[column]):
-            axis.text(
-                bar.get_x() + bar.get_width() / 2,
-                bar.get_height(),
-                f"{value:.2f}" if abs(value) < 1 else f"{value:.1f}",
-                ha="center",
-                va="bottom",
+    for column, title, xlabel, limits, name in charts:
+        fig, axis = plt.subplots(figsize=(9, 4.5))
+        positions = np.arange(len(group_table))
+        values = group_table[column].to_numpy(dtype=float)
+        colors = [GROUP_COLORS[group] for group in GROUP_ORDER if group in set(data["grupa"])]
+        for position, value, color in zip(positions, values, colors):
+            axis.plot(
+                [0, value],
+                [position, position],
+                color=color,
+                linewidth=2.5,
+                alpha=0.55,
+                zorder=2,
             )
-        fig.tight_layout()
-        figure_paths[name] = output_dir / f"{name}.png"
-        fig.savefig(figure_paths[name], dpi=140, bbox_inches="tight")
-        plt.close(fig)
-
-    fig, axis = plt.subplots(figsize=(9, 5))
-    bars = axis.barh(
-        subreddit_table["Reddit_zaednica"],
-        subreddit_table["Prosechen_neneutralen_rezultat_procent"],
-        color=BLUE,
-    )
-    axis.set_xlabel("Prosechen neneutralen VerA ML skor (%)")
-    axis.set_title("Najgolemi Reddit zaednici")
-    axis.set_xlim(0, 100)
-    axis.grid(axis="x", alpha=0.2)
-    for bar, value in zip(
-        bars,
-        subreddit_table["Prosechen_neneutralen_rezultat_procent"],
-    ):
-        axis.text(
-            value + 1,
-            bar.get_y() + bar.get_height() / 2,
-            f"{value:.0f}%",
-            va="center",
+        axis.scatter(values, positions, color=colors, s=58, zorder=3)
+        axis.set_yticks(
+            positions,
+            [
+                f"{label}  (n={count:,})"
+                for label, count in zip(
+                    group_table["Emocionalna_grupa"],
+                    group_table["Broj_komentari"],
+                )
+            ],
         )
-    fig.tight_layout()
+        axis.set_xlabel(xlabel)
+        axis.set_title(title, loc="left", fontweight="semibold")
+        axis.set_xlim(*limits)
+        axis.set_ylim(len(group_table) - 0.5, -0.5)
+        if name == "psovki":
+            axis.set_xticks(np.arange(0, 21, 5))
+        elif name == "dolzhina":
+            axis.set_xticks(np.arange(0, limits[1] + 1, 5))
+        if column == "Prosechen_ton":
+            axis.axvline(0, color="#344054", linewidth=1, zorder=1)
+        _style_axis(axis)
+        for position, value in enumerate(values):
+            offset = 6 if value >= 0 else -6
+            axis.annotate(
+                f"{value:.2f}" if abs(value) < 1 else f"{value:.1f}",
+                (value, position),
+                xytext=(offset, 0),
+                textcoords="offset points",
+                va="center",
+                ha="left" if value >= 0 else "right",
+                fontsize=9,
+                color=INK,
+            )
+        figure_paths[name] = output_dir / f"{name}.png"
+        _save_figure(fig, figure_paths[name])
+
+    fig, axis = plt.subplots(figsize=(10, 6))
+    y = np.arange(len(subreddit_table))
+    left = np.zeros(len(subreddit_table))
+    for group in GROUP_ORDER:
+        values = subreddit_table[f"{GROUP_LABELS[group]}_procent"].to_numpy()
+        axis.barh(
+            y,
+            values,
+            left=left,
+            label=GROUP_LABELS[group],
+            color=GROUP_COLORS[group],
+            height=0.72,
+            zorder=2,
+        )
+        left += values
+    axis.set_yticks(
+        y,
+        [
+            f"{name}  (n={count:,})"
+            for name, count in zip(
+                subreddit_table["Reddit_zaednica"],
+                subreddit_table["Broj_komentari"],
+            )
+        ],
+    )
+    axis.set_xlabel("Komentari po dominantna ML emocionalna grupa (%)")
+    axis.set_title(
+        "Emocionalen profil na Reddit zaednicite",
+        loc="left",
+        fontweight="semibold",
+    )
+    axis.set_xlim(0, 100)
+    axis.set_xticks(np.arange(0, 101, 20), [f"{value}%" for value in range(0, 101, 20)])
+    axis.legend(
+        title="Dominantna grupa",
+        frameon=False,
+        ncol=4,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.08),
+    )
+    _style_axis(axis)
+    axis.set_ylim(len(subreddit_table) - 0.5, -0.5)
     figure_paths["subreddits"] = output_dir / "reddit_zaednici.png"
-    fig.savefig(figure_paths["subreddits"], dpi=140, bbox_inches="tight")
-    plt.close(fig)
+    _save_figure(fig, figure_paths["subreddits"], rect=(0, 0.1, 1, 1))
 
     print(f"Sumirani komentari: {len(data):,}")
     print(f"Komentari so oznaki od izvornite ocenuvachi: {len(human_dominant):,}")
@@ -325,6 +481,7 @@ def run_simple_analysis(
         "emotion_table": emotion_path,
         "group_table": group_path,
         "subreddit_table": subreddit_path,
+        "report": report_path,
         **figure_paths,
     }
 

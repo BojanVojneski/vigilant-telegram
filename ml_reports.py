@@ -12,11 +12,22 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LinearSegmentedColormap
 
 from emotion_labels import EMOTION_LABELS
+from plot_style import (
+    BLUE,
+    GRID,
+    INK,
+    MUTED,
+    NAVY,
+    ORANGE,
+    RED,
+    TEAL,
+    apply_plot_style,
+)
 
-BLUE = "#4C78A8"
-ORANGE = "#F58518"
+apply_plot_style()
 
 
 def _label(emotion: str) -> str:
@@ -24,35 +35,60 @@ def _label(emotion: str) -> str:
 
 
 def plot_threshold_curve(
-    scores: Sequence[tuple[float, float]],
+    scores: Sequence[tuple[float, float, float, float]],
     selected_threshold: float,
     output_dir: Path,
 ) -> Path:
-    curve = pd.DataFrame(scores, columns=["threshold", "macro_f1"])
+    curve = pd.DataFrame(
+        scores,
+        columns=["threshold", "macro_precision", "macro_recall", "macro_f0_5"],
+    )
     selected = curve.loc[np.isclose(curve["threshold"], selected_threshold)]
     if selected.empty:
         raise ValueError("Selected threshold is missing from the tuning curve")
 
     fig, axis = plt.subplots(figsize=(8, 5))
-    axis.plot(curve["threshold"], curve["macro_f1"], marker="o", color=BLUE)
+    axis.plot(
+        curve["threshold"],
+        curve["macro_precision"],
+        marker="o",
+        color=BLUE,
+        label="Makro-preciznost",
+    )
+    axis.plot(
+        curve["threshold"],
+        curve["macro_recall"],
+        marker="o",
+        color=ORANGE,
+        label="Makro-odziv",
+    )
+    axis.plot(
+        curve["threshold"],
+        curve["macro_f0_5"],
+        marker="o",
+        color=TEAL,
+        label="Makro-F0.5",
+    )
     axis.scatter(
         [selected_threshold],
-        [selected["macro_f1"].iloc[0]],
+        [selected["macro_f0_5"].iloc[0]],
         marker="*",
         s=140,
-        color=ORANGE,
+        color=RED,
         zorder=3,
         label=f"Izbran prag: {selected_threshold:.3f}",
     )
-    axis.set_title("Makro-F1 po prag za oznachuvanje")
+    axis.axvline(selected_threshold, color=MUTED, linestyle="--", linewidth=1)
+    axis.set_title("Preciznost i odziv po prag", loc="left", fontweight="semibold")
     axis.set_xlabel("Prag")
-    axis.set_ylabel("Makro-F1 na razvojnite podatoci")
+    axis.set_ylabel("Merka na razvojnite podatoci")
     axis.set_ylim(0, 1)
-    axis.grid(alpha=0.2)
-    axis.legend()
+    axis.grid(axis="y", alpha=0.2)
+    axis.spines[["top", "right"]].set_visible(False)
+    axis.legend(frameon=False, ncol=2)
     fig.tight_layout()
-    path = output_dir / "pragovi_makro_f1.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    path = output_dir / "preciznost_odziv_po_pragu.png"
+    fig.savefig(path, dpi=180, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return path
 
@@ -85,46 +121,50 @@ def plot_emotion_f1(metrics: pd.DataFrame, output_dir: Path) -> Path:
         )
     fig.tight_layout()
     path = output_dir / "f1_po_emocija.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=180, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return path
 
 
 def plot_precision_recall(metrics: pd.DataFrame, output_dir: Path) -> Path:
-    required = {"Emocija", "Preciznost", "Odziv", "F1", "Poddrshka"}
+    required = {"Emocija", "Preciznost", "Odziv", "Poddrshka"}
     if not required <= set(metrics.columns) or metrics.empty:
         raise ValueError("Precision-recall metrics are incomplete")
-    selected = metrics.nlargest(10, "Poddrshka")
-    sizes = 25 + 4 * np.sqrt(selected["Poddrshka"].to_numpy())
-    fig, axis = plt.subplots(figsize=(8, 6))
-    points = axis.scatter(
-        selected["Preciznost"],
-        selected["Odziv"],
-        s=sizes,
-        c=selected["F1"],
-        cmap="viridis",
-        alpha=0.8,
-        edgecolors="white",
-        linewidths=0.7,
-    )
-    for row in selected.itertuples(index=False):
-        axis.annotate(
-            row.Emocija,
-            (row.Preciznost, row.Odziv),
-            xytext=(4, 4),
-            textcoords="offset points",
-            fontsize=8,
+    ordered = metrics.sort_values(["Preciznost", "Poddrshka"])
+    y = np.arange(len(ordered))
+    precision = ordered["Preciznost"].to_numpy()
+    recall = ordered["Odziv"].to_numpy()
+    fig, axis = plt.subplots(figsize=(9, 10))
+    for position, p_value, r_value in zip(y, precision, recall):
+        axis.plot(
+            [p_value, r_value],
+            [position, position],
+            color=GRID,
+            linewidth=1.5,
+            zorder=1,
         )
-    fig.colorbar(points, ax=axis, label="F1")
-    axis.set_title("Preciznost i odziv za 10 najchesti emocii")
-    axis.set_xlabel("Preciznost")
-    axis.set_ylabel("Odziv")
+    axis.scatter(precision, y - 0.08, color=BLUE, s=24, label="Preciznost", zorder=2)
+    axis.scatter(recall, y + 0.08, color=ORANGE, s=24, label="Odziv", zorder=2)
+    axis.set_yticks(
+        y,
+        [
+            f"{emotion} (n={support})"
+            for emotion, support in zip(ordered["Emocija"], ordered["Poddrshka"])
+        ],
+    )
+    axis.set_title(
+        "Preciznost i odziv za site emocii",
+        loc="left",
+        fontweight="semibold",
+    )
+    axis.set_xlabel("Rezultat")
     axis.set_xlim(0, 1)
-    axis.set_ylim(0, 1)
-    axis.grid(alpha=0.2)
+    axis.grid(axis="x", alpha=0.2)
+    axis.spines[["top", "right"]].set_visible(False)
+    axis.legend(frameon=False, loc="lower right")
     fig.tight_layout()
     path = output_dir / "preciznost_i_odziv.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=180, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return path
 
@@ -153,29 +193,76 @@ def plot_cooccurrence(
         where=supports[:, np.newaxis] > 0,
     ) * 100
     names = [_label(emotions[index]) for index in selected_indices]
+    diagonal = np.eye(top_n, dtype=bool)
+    displayed = np.ma.masked_where(diagonal, conditional)
+    cmap = LinearSegmentedColormap.from_list(
+        "vera_navy",
+        ["#F5F7FA", "#B8CEE0", "#5E8FB6", BLUE, NAVY],
+    )
+    cmap.set_bad("#E8EDF3")
 
     fig, axis = plt.subplots(figsize=(10, 8))
-    image = axis.imshow(conditional, cmap="Blues", vmin=0, vmax=100)
+    image = axis.imshow(displayed, cmap=cmap, vmin=0, vmax=20)
     axis.set_xticks(np.arange(top_n), names, rotation=45, ha="right")
     axis.set_yticks(np.arange(top_n), names)
-    axis.set_title("Ko-pojava na 12 najchesti emocii na test-skupot")
-    axis.set_xlabel("Emocija prisutna vo ist komentar")
-    axis.set_ylabel("Uslovna emocija")
+    axis.set_title(
+        "Emocii koi se pojavuvaat zaedno",
+        loc="left",
+        fontweight="semibold",
+        pad=18,
+    )
+    axis.text(
+        0,
+        1.01,
+        "Test-skup | 12 najchesti emocii | dijagonalata e iskluchena",
+        transform=axis.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=9,
+        color=MUTED,
+    )
+    axis.set_xlabel("Emocija vo komentarot (kolona)")
+    axis.set_ylabel("Uslovna emocija (red)")
+    axis.set_xticks(np.arange(-0.5, top_n, 1), minor=True)
+    axis.set_yticks(np.arange(-0.5, top_n, 1), minor=True)
+    axis.grid(which="minor", color="white", linewidth=1.5)
+    axis.tick_params(which="minor", bottom=False, left=False)
+    axis.tick_params(axis="both", labelsize=9)
+    axis.spines[["top", "right", "left", "bottom"]].set_visible(False)
     for row in range(top_n):
         for column in range(top_n):
+            if diagonal[row, column]:
+                axis.text(
+                    column,
+                    row,
+                    "-",
+                    ha="center",
+                    va="center",
+                    color=MUTED,
+                    fontsize=9,
+                )
+                continue
+            value = conditional[row, column]
             axis.text(
                 column,
                 row,
-                f"{conditional[row, column]:.0f}",
+                f"{value:.0f}%",
                 ha="center",
                 va="center",
-                color="white" if conditional[row, column] > 55 else "black",
+                color="white" if value >= 12 else INK,
                 fontsize=8,
             )
-    fig.colorbar(image, ax=axis, label="Procent od komentarite so uslovnata emocija")
-    fig.tight_layout()
+    colorbar = fig.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
+    colorbar.set_label(
+        "Udel so emocija od kolonata, megju komentarite so emocija od redot (%)"
+    )
+    colorbar.set_ticks(
+        [0, 5, 10, 15, 20],
+        labels=["0%", "5%", "10%", "15%", "20%"],
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
     path = output_dir / "ko_pojava_emocii.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=180, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return path
 
@@ -222,7 +309,7 @@ def plot_score_calibration(
     axis.legend(title="Emocija", fontsize=8)
     fig.tight_layout()
     path = output_dir / "kalibracija_skorovi.png"
-    fig.savefig(path, dpi=150, bbox_inches="tight")
+    fig.savefig(path, dpi=180, bbox_inches="tight", facecolor="white")
     plt.close(fig)
     return path
 
@@ -250,18 +337,21 @@ def write_academic_report(
 Zadachata e povekje-oznacna klasifikacija na tekst od GoEmotions. Modelot
 koristi TF-IDF zborovni n-grami i logistichka regresija so one-vs-rest
 klasifikacija. Izborot na C, n-grami i zaednichki prag e napraven samo na
-trenirachkite i razvojnite podatoci. Pragot e izbran spored najvisok makro-F1
-na razvojnata podelba; test-podelbata ne e koristena za izbor na model.
+trenirachkite i razvojnite podatoci. Pragot se izbira spored najvisok prosechen
+F0.5 po emocija na razvojnata podelba; test-podelbata ne se koristi za izbor.
 
 | Stavka | Vrednost |
 |---|---:|
 | C | {model_info["C"]} |
 | N-gram opseg | {model_info["ngram_range"]} |
 | Izbran prag | {model_info["threshold"]:.3f} |
+| Izbor na prag | Makro-F0.5 na razvojni podatoci |
 | Trenirachki komentari | {model_info["train_comments"]:,} |
 | Razvojni komentari | {model_info["development_comments"]:,} |
 | Test komentari | {model_info["test_comments"]:,} |
-| Razvoen makro-F1 | {model_info["development_macro_f1"]:.3f} |
+| Razvoen makro-F0.5 | {model_info["development_macro_f0_5"]:.3f} |
+| Razvoena makro-preciznost | {model_info["development_threshold_metrics"]["macro_precision"]:.3f} |
+| Razvoen makro-odziv | {model_info["development_threshold_metrics"]["macro_recall"]:.3f} |
 
 ## Rezultati na test-podelbata
 
@@ -270,11 +360,15 @@ na razvojnata podelba; test-podelbata ne e koristena za izbor na model.
 | Makro-preciznost | {metrics["Makro_preciznost"]:.3f} |
 | Makro-odziv | {metrics["Makro_odziv"]:.3f} |
 | Makro-F1 | {metrics["Makro_F1"]:.3f} |
+| Makro-F0.5 | {metrics["Makro_F0_5"]:.3f} |
 | Mikro-F1 | {metrics["Mikro_F1"]:.3f} |
 | Tochno poklopeni skupovi oznaki | {metrics["Tocnost_na_celiot_zapis"]:.3f} |
 
 Makro-F1 ja presmetuva prosechnata F1 vrednost so ednakva tezhina za sekoja
-emocija. Mikro-F1 gi sobira odlukite za site emocii pred presmetka.
+emocija. Pragot se bira spored prosechniot F0.5 po emocija, koj dava pogolema
+tezhina na preciznosta od odzivot; toa e nameren kompromis i obichno znachi
+pomalku predvideni oznaki i pomal odziv. Mikro-F1 gi sobira odlukite za site
+emocii pred presmetka.
 Tochnoto poklopuvanje bara modelot da gi predvidi site oznaki na komentarot
 bez greska, pa ovaa merka e postroga.
 
@@ -290,10 +384,10 @@ bez greska, pa ovaa merka e postroga.
 
 ## Grafichki prikazi
 
-- `pragovi_makro_f1.png`: izborot na prag vrz osnova na razvojniot skup.
+- `preciznost_odziv_po_pragu.png`: kompromis megju preciznost, odziv i makro-F0.5 na razvojniot skup.
 - `f1_po_emocija.png`: test-F1 i brojot na pozitivni primeri za sekoja emocija.
-- `preciznost_i_odziv.png`: odnos megju preciznost i odziv za 10te emocii so najgolema poddrshka.
-- `ko_pojava_emocii.png`: uslovna ko-pojava na 12te emocii so najgolema trenirachka poddrshka.
+- `preciznost_i_odziv.png`: sporedba na preciznost i odziv za site 28 emocii na test-skupot.
+- `ko_pojava_emocii.png`: procentot so emocija od kolonata megju komentarite so emocija od redot; gi prikazhuva 12te najchesti trenirachki emocii, bez trivijalnata dijagonala.
 - `kalibracija_skorovi.png`: sporedba na model-skorot so empiriskiot del na pozitivni oznaki za pette najchesti emocii.
 
 ## Tolkuvanje i ogranicuvanja

@@ -6,9 +6,9 @@ TF-IDF plus one-vs-rest logistic regression.
 
 Run `python simple_ml.py train` using data/simplified/train.tsv,
 dev.tsv, test.tsv, and emotions.txt. Hyperparameters and the shared
-prediction threshold are chosen with train/dev only; test is reserved for
-the final report. Run `python simple_ml.py predict --text "..."` to use
-the saved model.
+prediction threshold are chosen with train/dev only; the threshold maximizes
+macro F0.5 to prefer precision over recall. Test is reserved for the final
+report. Run `python simple_ml.py predict --text "..."` to use the saved model.
 
 Do not force a preferred neutral-label percentage. Keep the model simple
 and evaluate any changes on held-out data. Rare emotion metrics have low

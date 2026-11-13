@@ -17,7 +17,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
-    f1_score,
+    fbeta_score,
     hamming_loss,
     precision_recall_fscore_support,
 )
@@ -51,13 +51,22 @@ class DatasetSplit:
 
 
 @dataclass(frozen=True)
+class ThresholdMetrics:
+    threshold: float
+    macro_precision: float
+    macro_recall: float
+    macro_f1: float
+    macro_f0_5: float
+
+
+@dataclass(frozen=True)
 class CandidateResult:
     model: Pipeline
     C: float
     ngram_range: tuple[int, int]
     threshold: float
-    dev_macro_f1: float
-    threshold_scores: tuple[tuple[float, float], ...]
+    dev_macro_f0_5: float
+    threshold_scores: tuple[ThresholdMetrics, ...]
 
 
 def load_emotions(data_dir: Path) -> list[str]:
@@ -150,32 +159,48 @@ def build_model(C: float, ngram_range: tuple[int, int]) -> Pipeline:
     )
 
 
-def _macro_f1_by_threshold(
+def _metrics_by_threshold(
     labels: np.ndarray,
     scores: np.ndarray,
-) -> list[tuple[float, float]]:
-    return [
-        (
-            threshold,
-            float(
-                f1_score(
-                    labels,
-                    scores >= threshold,
-                    average="macro",
-                    zero_division=0,
-                )
-            ),
+) -> list[ThresholdMetrics]:
+    if labels.shape != scores.shape or labels.ndim != 2:
+        raise ValueError("Threshold labels and scores must have matching matrices")
+
+    metrics = []
+    for threshold in THRESHOLDS:
+        predictions = scores >= threshold
+        precision, recall, f1, _ = precision_recall_fscore_support(
+            labels,
+            predictions,
+            average="macro",
+            zero_division=0,
         )
-        for threshold in THRESHOLDS
-    ]
+        metrics.append(
+            ThresholdMetrics(
+                threshold=threshold,
+                macro_precision=float(precision),
+                macro_recall=float(recall),
+                macro_f1=float(f1),
+                macro_f0_5=float(
+                    fbeta_score(
+                        labels,
+                        predictions,
+                        beta=0.5,
+                        average="macro",
+                        zero_division=0,
+                    )
+                ),
+            )
+        )
+    return metrics
 
 
 def _is_better_candidate(
     candidate: CandidateResult,
     current: CandidateResult | None,
 ) -> bool:
-    if current is None or candidate.dev_macro_f1 != current.dev_macro_f1:
-        return current is None or candidate.dev_macro_f1 > current.dev_macro_f1
+    if current is None or candidate.dev_macro_f0_5 != current.dev_macro_f0_5:
+        return current is None or candidate.dev_macro_f0_5 > current.dev_macro_f0_5
     candidate_complexity = (candidate.ngram_range[1], candidate.C)
     current_complexity = (current.ngram_range[1], current.C)
     return candidate_complexity < current_complexity
@@ -214,13 +239,38 @@ def _evaluate(
         average=None,
         zero_division=0,
     )
+    f0_5_by_emotion = fbeta_score(
+        labels,
+        predictions,
+        beta=0.5,
+        average=None,
+        zero_division=0,
+    )
     summary = {
         "Makro_preciznost": float(macro[0]),
         "Makro_odziv": float(macro[1]),
         "Makro_F1": float(macro[2]),
+        "Makro_F0_5": float(
+            fbeta_score(
+                labels,
+                predictions,
+                beta=0.5,
+                average="macro",
+                zero_division=0,
+            )
+        ),
         "Mikro_preciznost": float(micro[0]),
         "Mikro_odziv": float(micro[1]),
         "Mikro_F1": float(micro[2]),
+        "Mikro_F0_5": float(
+            fbeta_score(
+                labels,
+                predictions,
+                beta=0.5,
+                average="micro",
+                zero_division=0,
+            )
+        ),
         "Tocnost_na_celiot_zapis": float(accuracy_score(labels, predictions)),
         "Pogreshna_oznaka_del": float(hamming_loss(labels, predictions)),
         "Prosechno_oznaki_po_komentar": float(labels.sum(axis=1).mean()),
@@ -231,6 +281,7 @@ def _evaluate(
             "Preciznost": precision,
             "Odziv": recall,
             "F1": f1,
+            "F0_5": f0_5_by_emotion,
             "Poddrshka": support.astype(int),
         }
     )
@@ -271,22 +322,25 @@ def train_model(
             model = build_model(C, ngram_range)
             model.fit(train_split.texts, train_split.labels)
             dev_scores = model.predict_proba(dev_split.texts)
-            curve = _macro_f1_by_threshold(dev_split.labels, dev_scores)
-            threshold, dev_macro_f1 = max(curve, key=lambda result: result[1])
+            curve = _metrics_by_threshold(dev_split.labels, dev_scores)
+            selected_metrics = max(curve, key=lambda result: result.macro_f0_5)
             candidate = CandidateResult(
                 model=model,
                 C=C,
                 ngram_range=ngram_range,
-                threshold=threshold,
-                dev_macro_f1=dev_macro_f1,
+                threshold=selected_metrics.threshold,
+                dev_macro_f0_5=selected_metrics.macro_f0_5,
                 threshold_scores=tuple(curve),
             )
             candidate_rows.append(
                 {
                     "C": C,
                     "Ngram": f"{ngram_range[0]}-{ngram_range[1]}",
-                    "Prag": threshold,
-                    "Dev_makro_F1": dev_macro_f1,
+                    "Prag": selected_metrics.threshold,
+                    "Dev_makro_preciznost": selected_metrics.macro_precision,
+                    "Dev_makro_odziv": selected_metrics.macro_recall,
+                    "Dev_makro_F1": selected_metrics.macro_f1,
+                    "Dev_makro_F0_5": selected_metrics.macro_f0_5,
                 }
             )
             if _is_better_candidate(candidate, best):
@@ -294,6 +348,11 @@ def train_model(
 
     if best is None:
         raise RuntimeError("Model tuning produced no candidate")
+    selected_threshold_metrics = next(
+        metric
+        for metric in best.threshold_scores
+        if metric.threshold == best.threshold
+    )
     test_scores = best.model.predict_proba(test_split.texts)
     test_summary, per_emotion = _evaluate(
         test_split.labels,
@@ -303,7 +362,7 @@ def train_model(
     )
     results_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(candidate_rows).sort_values(
-        "Dev_makro_F1", ascending=False
+        "Dev_makro_F0_5", ascending=False
     ).to_csv(results_dir / "dev_model_selection.csv", index=False)
     pd.DataFrame(
         [
@@ -315,13 +374,40 @@ def train_model(
         ]
     ).to_csv(results_dir / "test_metrici.csv", index=False)
     per_emotion.to_csv(results_dir / "emocionalni_metrici.csv", index=False)
-    pd.DataFrame(
+    threshold_curve_path = pd.DataFrame(
         [
-            {"Prag": value, "Dev_makro_F1": score}
-            for value, score in best.threshold_scores
+            {
+                "Prag": metric.threshold,
+                "Dev_makro_preciznost": metric.macro_precision,
+                "Dev_makro_odziv": metric.macro_recall,
+                "Dev_makro_F1": metric.macro_f1,
+                "Dev_makro_F0_5": metric.macro_f0_5,
+            }
+            for metric in best.threshold_scores
         ]
-    ).to_csv(results_dir / "pragovi_makro_f1.csv", index=False)
-    plot_threshold_curve(best.threshold_scores, best.threshold, results_dir)
+    )
+    threshold_curve_path.to_csv(
+        results_dir / "pragovi_preciznost_odziv.csv",
+        index=False,
+    )
+    for old_path in (
+        results_dir / "pragovi_makro_f1.csv",
+        results_dir / "pragovi_makro_f1.png",
+    ):
+        old_path.unlink(missing_ok=True)
+    plot_threshold_curve(
+        [
+            (
+                metric.threshold,
+                metric.macro_precision,
+                metric.macro_recall,
+                metric.macro_f0_5,
+            )
+            for metric in best.threshold_scores
+        ],
+        best.threshold,
+        results_dir,
+    )
     plot_emotion_f1(per_emotion, results_dir)
     plot_precision_recall(per_emotion, results_dir)
     plot_cooccurrence(
@@ -346,10 +432,16 @@ def train_model(
     joblib.dump(artifact, results_dir / "model.joblib")
     selected = {
         "algorithm": "TF-IDF + One-vs-Rest Logistic Regression",
+        "threshold_selection_metric": "development macro F0.5",
         "C": best.C,
         "ngram_range": best.ngram_range,
         "threshold": best.threshold,
-        "development_macro_f1": best.dev_macro_f1,
+        "development_macro_f0_5": best.dev_macro_f0_5,
+        "development_threshold_metrics": {
+            "macro_precision": selected_threshold_metrics.macro_precision,
+            "macro_recall": selected_threshold_metrics.macro_recall,
+            "macro_f1": selected_threshold_metrics.macro_f1,
+        },
         "train_comments": len(train_split.texts),
         "development_comments": len(dev_split.texts),
         "test_comments": len(test_split.texts),
@@ -364,14 +456,15 @@ def train_model(
     )
     write_academic_report(selected, test_summary, per_emotion, results_dir)
     print(f"Komentari za obuka: {len(train_split.texts):,}")
-    print(f"Makro-F1 na razvojniot skup: {best.dev_macro_f1:.3f}")
+    print(f"Makro-F0.5 na razvojniot skup: {best.dev_macro_f0_5:.3f}")
+    print(f"Makro-preciznost na test-skupot: {test_summary['Makro_preciznost']:.3f}")
     print(f"Makro-F1 na test-skupot: {test_summary['Makro_F1']:.3f}")
     print(f"Izbran prag: {best.threshold:.3f}")
     print(f"Rezultati i model: {results_dir}")
     return {
         "model": best.model,
         "threshold": best.threshold,
-        "development_macro_f1": best.dev_macro_f1,
+        "development_macro_f0_5": best.dev_macro_f0_5,
         "test_metrics": test_summary,
         "per_emotion_metrics": per_emotion,
         "results_dir": results_dir,
