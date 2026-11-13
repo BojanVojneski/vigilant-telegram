@@ -1,0 +1,17 @@
+{
+  "algorithm": "TF-IDF + One-vs-Rest Logistic Regression",
+  "C": 5.0,
+  "ngram_range": [
+    1,
+    2
+  ],
+  "threshold": 0.125,
+  "development_macro_f1": 0.4471672014437829,
+  "train_comments": 43410,
+  "development_comments": 5426,
+  "test_comments": 5427,
+  "feature_count": 58338,
+  "random_seed": 42,
+  "scikit_learn_version": "1.9.1",
+  "python_version": "3.14.3"
+}

@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+input/final_scored_comments.csv
+data/raw/
+data/processed/
+data/validation/
+data/simplified/*.tsv
+results/ml/model.joblib

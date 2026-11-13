@@ -1,0 +1,19 @@
+VerA - reminder for future work
+
+VerA is a small, standalone multi-label emotion ML program, not the main
+H1-H5 research project. The trainable model is in simple_ml.py:
+TF-IDF plus one-vs-rest logistic regression.
+
+Run `python simple_ml.py train` using data/simplified/train.tsv,
+dev.tsv, test.tsv, and emotions.txt. Hyperparameters and the shared
+prediction threshold are chosen with train/dev only; test is reserved for
+the final report. Run `python simple_ml.py predict --text "..."` to use
+the saved model.
+
+Do not force a preferred neutral-label percentage. Keep the model simple
+and evaluate any changes on held-out data. Rare emotion metrics have low
+support and can vary. Scores are not psychological certainty.
+
+The user prefers visible report text in ASCII Macedonian Latin. Keep
+private/raw and validation data out of a public repository. The simple
+descriptive CSV analyzer remains a separate optional utility.
