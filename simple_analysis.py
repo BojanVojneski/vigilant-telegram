@@ -1,8 +1,9 @@
-"""Make a small, descriptive report from the already-scored comments."""
+"""Make a descriptive report grouped by VerA ML predictions."""
 
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import matplotlib
@@ -14,11 +15,16 @@ import numpy as np
 import pandas as pd
 
 from emotion_labels import EMOTION_LABELS
+from simple_ml import predict_scores
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 DEFAULT_INPUT = PROJECT_ROOT / "input" / "final_scored_comments.csv"
 DEFAULT_OUTPUT = PROJECT_ROOT / "results"
+DEFAULT_MODEL = PROJECT_ROOT / "results" / "ml" / "model.joblib"
+SENTIMENT_MAPPING = (
+    PROJECT_ROOT / "data" / "simplified" / "sentiment_mapping.json"
+)
 GROUP_ORDER = ["negative", "positive", "ambiguous", "neutral"]
 BLUE = "#4C78A8"
 ORANGE = "#F58518"
@@ -28,17 +34,51 @@ GROUP_LABELS = {
     "ambiguous": "Nejasna",
     "neutral": "Neutralna",
 }
+
+
+def _load_emotion_groups(emotions: list[str]) -> dict[str, str]:
+    mapping = json.loads(SENTIMENT_MAPPING.read_text(encoding="utf-8"))
+    if not isinstance(mapping, dict):
+        raise ValueError(
+            f"Nevalidno mapiranje na emocionalni grupi: {SENTIMENT_MAPPING}"
+        )
+
+    groups = {"neutral": "neutral"}
+    for group, members in mapping.items():
+        if group not in {"negative", "positive", "ambiguous"} or not isinstance(
+            members, list
+        ):
+            raise ValueError(f"Nevalidna emocionalna grupa vo: {SENTIMENT_MAPPING}")
+        for emotion in members:
+            if (
+                not isinstance(emotion, str)
+                or emotion not in emotions
+                or emotion in groups
+            ):
+                raise ValueError(
+                    f"Nevalidna ili povtorena emocija vo: {SENTIMENT_MAPPING}"
+                )
+            groups[emotion] = group
+
+    if set(groups) != set(emotions):
+        raise ValueError(
+            f"Mapiranjeto na grupi ne gi opfakja site emocii: {SENTIMENT_MAPPING}"
+        )
+    return groups
+
+
 def run_simple_analysis(
     input_path: str | Path = DEFAULT_INPUT,
     output_dir: str | Path = DEFAULT_OUTPUT,
     emotions_path: str | Path | None = None,
+    model_path: str | Path = DEFAULT_MODEL,
 ) -> dict[str, Path]:
-    """Write simple counts, averages, and charts; no hypothesis tests."""
+    """Write simple summaries grouped by VerA's dominant emotion predictions."""
     input_path = Path(input_path)
     output_dir = Path(output_dir)
     if not input_path.is_file():
         raise FileNotFoundError(
-            f"Ne e pronajdena datotekata so oceneti komentari: {input_path}. "
+            f"Ne e pronajdena datotekata so anotirani komentari: {input_path}. "
             "Stavete ja CSV-datotekata na ovaa lokacija."
         )
 
@@ -56,12 +96,9 @@ def run_simple_analysis(
         raise ValueError(
             f"Listata na emocii mora da ima unikatni stavki: {emotion_file}"
         )
-    human_columns = [f"human_{emotion}" for emotion in emotions]
     required = {
-        *emotions,
-        *human_columns,
-        "glavna_emocija",
-        "grupa",
+        "text",
+        *(f"human_{emotion}" for emotion in emotions),
         "dol",
         "vulg_any",
         "pol",
@@ -76,18 +113,41 @@ def run_simple_analysis(
         )
     if data.empty:
         raise ValueError("Datotekata so oceneti komentari e prazna")
+    if (
+        data["text"].isna().any()
+        or data["text"].astype(str).str.strip().eq("").any()
+    ):
+        raise ValueError("Site komentari mora da sodrzhat tekst")
 
+    scores, model_emotions, _ = predict_scores(
+        data["text"].astype(str).tolist(),
+        model_path,
+    )
+    if model_emotions != emotions:
+        raise ValueError(
+            "Listata na emocii vo modelot ne se sovpagja so input/emotions.txt"
+        )
+    emotion_groups = _load_emotion_groups(emotions)
+    data[emotions] = pd.DataFrame(scores, index=data.index, columns=emotions)
+    data["glavna_emocija"] = [emotions[index] for index in scores.argmax(axis=1)]
+    data["grupa"] = data["glavna_emocija"].map(emotion_groups)
+    if data["grupa"].isna().any():
+        raise ValueError("Modelot proizvede emocija bez emocionalna grupa")
+
+    human_columns = [f"human_{emotion}" for emotion in emotions]
     human_scores = data[human_columns]
     has_human_labels = human_scores.sum(axis=1) > 0
     human_dominant = human_scores.loc[has_human_labels].idxmax(axis=1)
     human_dominant = human_dominant.str.removeprefix("human_")
-    model_counts = data["glavna_emocija"].value_counts().reindex(emotions, fill_value=0)
+    model_counts = (
+        data["glavna_emocija"].value_counts().reindex(emotions, fill_value=0)
+    )
     human_counts = human_dominant.value_counts().reindex(emotions, fill_value=0)
     emotion_table = pd.DataFrame(
         {
             "Emocija": [EMOTION_LABELS.get(emotion, emotion) for emotion in emotions],
-            "Model_komentari": model_counts.to_numpy(),
-            "Model_procent": model_counts.to_numpy() / len(data) * 100,
+            "VerA_ML_komentari": model_counts.to_numpy(),
+            "VerA_ML_procent": model_counts.to_numpy() / len(data) * 100,
             "Izvorni_rateri_komentari": human_counts.to_numpy(),
             "Izvorni_rateri_procent": (
                 human_counts.to_numpy() / len(human_dominant) * 100
@@ -150,7 +210,7 @@ def run_simple_analysis(
     top_emotions = (
         emotion_table.assign(
             vkupno=lambda table: (
-                table["Model_komentari"] + table["Izvorni_rateri_komentari"]
+                table["VerA_ML_komentari"] + table["Izvorni_rateri_komentari"]
             ),
         )
         .set_index("Emocija")
@@ -164,9 +224,9 @@ def run_simple_analysis(
     height = 0.38
     axis.barh(
         y - height / 2,
-        top_emotions["Model_procent"],
+        top_emotions["VerA_ML_procent"],
         height,
-        label="Model",
+        label="VerA ML model",
         color=BLUE,
     )
     axis.barh(
@@ -178,7 +238,7 @@ def run_simple_analysis(
     )
     axis.set_yticks(y, top_emotions.index)
     axis.set_xlabel("Komentari (%)")
-    axis.set_title("Najchesti dominantni emocii")
+    axis.set_title("Dominantni emocii: VerA ML model i ocenuvachi")
     axis.legend()
     axis.grid(axis="x", alpha=0.2)
     fig.tight_layout()
@@ -212,7 +272,7 @@ def run_simple_analysis(
             color=BLUE,
         )
         axis.set_title(title)
-        axis.set_xlabel("Emocionalna grupa od modelot")
+        axis.set_xlabel("Emocionalna grupa od VerA ML modelot")
         axis.set_ylabel(ylabel)
         if limit is not None:
             axis.set_ylim(0, limit)
@@ -238,7 +298,7 @@ def run_simple_analysis(
         subreddit_table["Prosechen_neneutralen_rezultat_procent"],
         color=BLUE,
     )
-    axis.set_xlabel("Prosechen neneutralen rezultat na modelot (%)")
+    axis.set_xlabel("Prosechen neneutralen VerA ML skor (%)")
     axis.set_title("Najgolemi Reddit zaednici")
     axis.set_xlim(0, 100)
     axis.grid(axis="x", alpha=0.2)
@@ -259,6 +319,7 @@ def run_simple_analysis(
 
     print(f"Sumirani komentari: {len(data):,}")
     print(f"Komentari so oznaki od izvornite ocenuvachi: {len(human_dominant):,}")
+    print("Emocionalnite grupi se izvedeni od skorovite na VerA ML modelot.")
     print(f"Tabeli i ednostavni grafikoni: {output_dir}")
     return {
         "emotion_table": emotion_path,
@@ -275,9 +336,11 @@ if __name__ == "__main__":
     parser.add_argument("--input", type=Path, default=DEFAULT_INPUT)
     parser.add_argument("--emotions", type=Path)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
+    parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     arguments = parser.parse_args()
     run_simple_analysis(
         input_path=arguments.input,
         output_dir=arguments.output_dir,
         emotions_path=arguments.emotions,
+        model_path=arguments.model,
     )

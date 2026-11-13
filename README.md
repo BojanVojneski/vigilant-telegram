@@ -47,5 +47,20 @@ Se prikazhuvaat site emocii nad izbraniot prag so nivniot model-skor.
 Skorot ne e psiholoshka procenka ili garancija za vistinskoto chuvstvo na
 avtorot.
 
-`simple_analysis.py` e dopolnitelen izvestaj za vekje oceneti komentari;
-ne trenira model. CSV-so komentarite ne se vkluchuva vo repozitoriumot.
+## Opisni izvestai so ML
+
+Po obuka, stavete ja anotiranata CSV-datoteka vo `input/final_scored_comments.csv`
+i izvrshite:
+
+```text
+python simple_analysis.py
+```
+
+Skriptata povtorno gi ocenuva tekstovite so VerA modelot i gi koristi tie
+skorovi za dominantna emocija i emocionalna grupa. Dominantna e emocijata so
+najvisok skor od site 28 emocii; ova e odvoeno od pragot za povekje oznaki.
+Grafikonite za dolzhina, psovki, ton, subjektivnost i Reddit-zaednici gi
+prikazhuvaat opisnite podatoci od CSV po VerA ML-grupa; tie ne se metriki za
+uspeh na klasifikatorot.
+
+CSV-so komentarite sodrzhi tekst i ne se vkluchuva vo repozitoriumot.

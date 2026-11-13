@@ -378,9 +378,7 @@ def train_model(
     }
 
 
-def predict_text(text: str, model_path: str | Path) -> list[tuple[str, float]]:
-    if not text.strip():
-        raise ValueError("Tekstot za predviduvanje ne smee da bide prazen")
+def _load_model_artifact(model_path: str | Path) -> tuple[Pipeline, list[str], float]:
     artifact = joblib.load(model_path)
     if not isinstance(artifact, dict) or not {
         "model",
@@ -392,19 +390,49 @@ def predict_text(text: str, model_path: str | Path) -> list[tuple[str, float]]:
     emotions = artifact["emotions"]
     threshold = artifact["threshold"]
     if (
-        not isinstance(emotions, list)
+        not isinstance(model, Pipeline)
+        or not isinstance(emotions, list)
         or not all(isinstance(emotion, str) for emotion in emotions)
+        or not emotions
+        or len(emotions) != len(set(emotions))
         or not isinstance(threshold, (int, float))
         or not 0 < threshold < 1
     ):
         raise ValueError(f"Invalid model metadata: {model_path}")
-    scores = model.predict_proba([text])[0]
-    if scores.shape != (len(emotions),):
+    return model, emotions, float(threshold)
+
+
+def predict_scores(
+    texts: Sequence[str],
+    model_path: str | Path,
+    batch_size: int = 1024,
+) -> tuple[np.ndarray, list[str], float]:
+    if not texts:
+        raise ValueError("Tekstovite za predviduvanje ne smeat da bidat prazni")
+    if batch_size < 1:
+        raise ValueError("Batch size mora da bide pozitiven")
+    if any(not isinstance(text, str) or not text.strip() for text in texts):
+        raise ValueError("Tekstovite za predviduvanje ne smeat da bidat prazni")
+
+    model, emotions, threshold = _load_model_artifact(model_path)
+    batches = [
+        model.predict_proba(texts[start : start + batch_size])
+        for start in range(0, len(texts), batch_size)
+    ]
+    scores = np.vstack(batches)
+    if scores.shape != (len(texts), len(emotions)):
         raise ValueError(f"Model output does not match its emotion list: {model_path}")
+    if not np.isfinite(scores).all() or ((scores < 0) | (scores > 1)).any():
+        raise ValueError(f"Model scores must be finite values in [0, 1]: {model_path}")
+    return scores, emotions, threshold
+
+
+def predict_text(text: str, model_path: str | Path) -> list[tuple[str, float]]:
+    scores, emotions, threshold = predict_scores([text], model_path)
     labels = [
-        (EMOTION_LABELS.get(emotion, emotion), float(scores[index]))
+        (EMOTION_LABELS.get(emotion, emotion), float(scores[0, index]))
         for index, emotion in enumerate(emotions)
-        if scores[index] >= threshold
+        if scores[0, index] >= threshold
     ]
     return sorted(labels, key=lambda result: result[1], reverse=True)
 

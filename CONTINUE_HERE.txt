@@ -15,5 +15,6 @@ and evaluate any changes on held-out data. Rare emotion metrics have low
 support and can vary. Scores are not psychological certainty.
 
 The user prefers visible report text in ASCII Macedonian Latin. Keep
-private/raw and validation data out of a public repository. The simple
-descriptive CSV analyzer remains a separate optional utility.
+private/raw and validation data out of a public repository. The optional
+simple_analysis.py report re-scores input comment text with the saved VerA
+model and groups descriptive CSV fields by the highest-scoring emotion.
